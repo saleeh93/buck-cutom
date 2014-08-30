@@ -20,12 +20,16 @@ import com.facebook.buck.graph.AbstractAcyclicDepthFirstPostOrderTraversal;
 import com.facebook.buck.rules.BuildRule;
 import com.facebook.buck.rules.BuildRuleType;
 import com.google.common.base.Optional;
+import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSortedSet;
+import com.google.common.collect.Iterables;
 
 import java.io.IOException;
 import java.util.Iterator;
+
+import javax.annotation.Nullable;
 
 /**
  * Helpers for reading properties of Apple target build rules.
@@ -37,16 +41,12 @@ public final class AppleBuildRules {
 
   private static final ImmutableSet<BuildRuleType> XCODE_TARGET_BUILD_RULE_TYPES =
       ImmutableSet.of(
-          IosBinaryDescription.TYPE,
           AppleLibraryDescription.TYPE,
           AppleBinaryDescription.TYPE,
-          AppleBundleDescription.TYPE,
-          IosTestDescription.TYPE,
-          MacosxBinaryDescription.TYPE,
-          MacosxFrameworkDescription.TYPE);
+          AppleBundleDescription.TYPE);
 
   private static final ImmutableSet<BuildRuleType> XCODE_TARGET_BUILD_RULE_TEST_TYPES =
-      ImmutableSet.of(IosTestDescription.TYPE, AppleTestDescription.TYPE);
+      ImmutableSet.of(AppleTestDescription.TYPE);
 
   private static final ImmutableSet<AppleBundleExtension> XCODE_TARGET_TEST_BUNDLE_EXTENSIONS =
       ImmutableSet.of(AppleBundleExtension.OCTEST, AppleBundleExtension.XCTEST);
@@ -178,5 +178,29 @@ public final class AppleBuildRules {
       throw new RuntimeException(e);
     }
     return filteredRules.build();
+  }
+
+  public static ImmutableSet<BuildRule> getSchemeBuildableRules(BuildRule primaryRule) {
+    final Iterable<BuildRule> buildRulesIterable = Iterables.concat(
+        getRecursiveRuleDependenciesOfTypes(
+            RecursiveRuleDependenciesMode.BUILDING,
+            primaryRule,
+            Optional.<ImmutableSet<BuildRuleType>>absent()),
+        ImmutableSet.of(primaryRule));
+
+    return ImmutableSet.copyOf(
+        Iterables.filter(
+            buildRulesIterable,
+            new Predicate<BuildRule>() {
+              @Override
+              public boolean apply(@Nullable BuildRule input) {
+                if (!isXcodeTargetBuildRuleType(input.getType()) &&
+                    XcodeNativeDescription.TYPE != input.getType()) {
+                  return false;
+                }
+
+                return true;
+              }
+            }));
   }
 }

@@ -13,8 +13,8 @@ EMPTY_CONFIGS = {
   ),
 }
 
-ios_binary(
-  name = 'TestApp',
+apple_binary(
+  name = 'TestAppBinary',
   configs = EMPTY_CONFIGS,
   srcs = [],
   frameworks = [],
@@ -24,8 +24,15 @@ ios_binary(
   ],
 )
 
-ios_test(
-  name = 'TestAppTests',
+apple_bundle(
+  name = 'TestApp',
+  deps = [':TestAppBinary'],
+  binary = ':TestAppBinary',
+  extension = 'app',
+)
+
+apple_library(
+  name = 'TestAppTestsLibrary',
   configs = EMPTY_CONFIGS,
   srcs = [],
   frameworks = [],
@@ -33,6 +40,20 @@ ios_test(
     '//Libraries:Dep1',
     '//Libraries:Dep2',
   ],
+)
+
+apple_bundle(
+  name = 'TestAppTests',
+  extension = 'octest',
+  deps = [':TestAppTestsLibrary#dynamic'],
+  binary = ':TestAppTestsLibrary#dynamic',
+)
+  
+apple_test(
+  name = 'TestAppTestsTest',
+  test_bundle = ':TestAppTests',
+  deps = [':TestAppTests'],
+  source_under_test = [':TestApp'],
 )
 
 xcode_project_config(

@@ -53,7 +53,6 @@ import com.facebook.buck.util.AndroidPlatformTarget;
 import com.facebook.buck.util.Optionals;
 import com.facebook.buck.util.ProjectFilesystem;
 import com.facebook.buck.zip.RepackZipEntriesStep;
-import com.facebook.buck.zip.ZipDirectoryWithMaxDeflateStep;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Joiner;
@@ -105,11 +104,6 @@ public class AndroidBinary extends AbstractBuildRule implements
    * secondary-N.dex.jar files for secondary dexes.
    */
   static final String SECONDARY_DEX_SUBDIR = "assets/secondary-program-dex-jars";
-
-  /**
-   * The largest file size Froyo will deflate.
-   */
-  private static final long FROYO_DEFLATE_LIMIT_BYTES = 1 << 20;
 
   private final Optional<Path> proguardJarOverride;
 
@@ -211,12 +205,14 @@ public class AndroidBinary extends AbstractBuildRule implements
     this.enhancementResult = Preconditions.checkNotNull(enhancementResult);
     this.primaryDexPath = getPrimaryDexPath(params.getBuildTarget());
 
-    if (exopackage && !enhancementResult.getPreDexMerge().isPresent()) {
-      throw new IllegalArgumentException(getBuildTarget() +
-          " specified exopackage without pre-dexing, which is invalid.");
-    }
-
     if (exopackage) {
+      Preconditions.checkArgument(enhancementResult.getPreDexMerge().isPresent(),
+          "%s specified exopackage without pre-dexing, which is invalid.",
+          getBuildTarget());
+      Preconditions.checkArgument(dexSplitMode.getDexStore() == DexStore.JAR,
+          "%s specified exopackage with secondary dex mode %s, " +
+              "which is invalid.  (Only JAR is allowed.)",
+          getBuildTarget(), dexSplitMode.getDexStore());
       Preconditions.checkArgument(enhancementResult.getComputeExopackageDepsAbi().isPresent(),
           "computeExopackageDepsAbi must be set if exopackage is true.");
     }
@@ -495,18 +491,22 @@ public class AndroidBinary extends AbstractBuildRule implements
 
     // If non-english strings are to be stored as assets, pass them to ApkBuilder.
     ImmutableSet.Builder<Path> zipFiles = ImmutableSet.builder();
-    zipFiles.addAll(dexFilesInfo.secondaryDexZips);
     Optional<PackageStringAssets> packageStringAssets = enhancementResult.getPackageStringAssets();
     if (packageStringAssets.isPresent()) {
       final Path pathToStringAssetsZip = packageStringAssets.get().getPathToStringAssetsZip();
       zipFiles.add(pathToStringAssetsZip);
     }
 
+    ImmutableSet<Path> allAssetDirectories = ImmutableSet.<Path>builder()
+        .addAll(nativeLibraryAsAssetDirectories)
+        .addAll(dexFilesInfo.secondaryDexDirs)
+        .build();
+
     ApkBuilderStep apkBuilderCommand = new ApkBuilderStep(
         enhancementResult.getAaptPackageResources().getResourceApkPath(),
         getSignedApkPath(),
         dexFilesInfo.primaryDexPath,
-        nativeLibraryAsAssetDirectories,
+        allAssetDirectories,
         nativeLibraryDirectories,
         zipFiles.build(),
         packageableCollection.pathsToThirdPartyJars,
@@ -678,23 +678,8 @@ public class AndroidBinary extends AbstractBuildRule implements
     } else if (!exopackage) {
       secondaryDexDirectoriesBuilder.addAll(preDexMerge.get().getSecondaryDexDirectories());
     }
-    ImmutableSet<Path> secondaryDexDirectories = secondaryDexDirectoriesBuilder.build();
 
-    // Due to limitations of Froyo, we need to ensure that all secondary zip files are STORED in
-    // the final APK, not DEFLATED.  The only way to ensure this with ApkBuilder is to zip up the
-    // the files properly and then add the zip files to the apk.
-    ImmutableSet.Builder<Path> secondaryDexZips = ImmutableSet.builder();
-    for (Path secondaryDexDirectory : secondaryDexDirectories) {
-      // String the trailing slash from the directory name and add the zip extension.
-      Path zipFile = Paths.get(secondaryDexDirectory.toString().replaceAll("/$", "") + ".zip");
-
-      secondaryDexZips.add(zipFile);
-      steps.add(new ZipDirectoryWithMaxDeflateStep(secondaryDexDirectory,
-          zipFile,
-          FROYO_DEFLATE_LIMIT_BYTES));
-    }
-
-    return new DexFilesInfo(primaryDexPath, secondaryDexZips.build());
+    return new DexFilesInfo(primaryDexPath, secondaryDexDirectoriesBuilder.build());
   }
 
   public AndroidPackageableCollection getAndroidPackageableCollection() {
@@ -911,8 +896,12 @@ public class AndroidBinary extends AbstractBuildRule implements
       secondaryDexDir = Optional.of(secondaryDexParentDir.resolve(SECONDARY_DEX_SUBDIR));
       steps.add(new MkdirStep(secondaryDexDir.get()));
 
-      secondaryDexDirectories.add(secondaryJarMetaDirParent);
-      secondaryDexDirectories.add(secondaryDexParentDir);
+      if (dexSplitMode.getDexStore() == DexStore.RAW) {
+        secondaryDexDirectories.add(secondaryDexDir.get());
+      } else {
+        secondaryDexDirectories.add(secondaryJarMetaDirParent);
+        secondaryDexDirectories.add(secondaryDexParentDir);
+      }
 
       // Adjust smart-dex inputs for the split-zip case.
       primaryInputsToDex = Suppliers.<Set<Path>>ofInstance(ImmutableSet.of(primaryJarPath));
@@ -1003,11 +992,11 @@ public class AndroidBinary extends AbstractBuildRule implements
    */
   private static class DexFilesInfo {
     final Path primaryDexPath;
-    final ImmutableSet<Path> secondaryDexZips;
+    final ImmutableSet<Path> secondaryDexDirs;
 
-    DexFilesInfo(Path primaryDexPath, ImmutableSet<Path> secondaryDexZips) {
+    DexFilesInfo(Path primaryDexPath, ImmutableSet<Path> secondaryDexDirs) {
       this.primaryDexPath = Preconditions.checkNotNull(primaryDexPath);
-      this.secondaryDexZips = Preconditions.checkNotNull(secondaryDexZips);
+      this.secondaryDexDirs = Preconditions.checkNotNull(secondaryDexDirs);
     }
   }
 }

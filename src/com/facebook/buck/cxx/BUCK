@@ -14,6 +14,9 @@ java_library(
     '//src/com/facebook/buck/util:constants',
     '//src/com/facebook/buck/util:io',
     '//src/com/facebook/buck/util:util',
+    '//src/com/facebook/buck/graph:graph',
+    '//src/com/facebook/buck/util:exceptions',
+    '//src/com/facebook/buck/cli:config',
     '//third-party/java/infer-annotations:infer-annotations',
   ],
   visibility = [

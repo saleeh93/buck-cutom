@@ -30,8 +30,6 @@ import com.facebook.buck.apple.AppleBundleDescription;
 import com.facebook.buck.apple.AppleBundleExtension;
 import com.facebook.buck.apple.AppleBinary;
 import com.facebook.buck.apple.AppleBinaryDescription;
-import com.facebook.buck.apple.AppleExtension;
-import com.facebook.buck.apple.AppleExtensionDescription;
 import com.facebook.buck.apple.AppleLibrary;
 import com.facebook.buck.apple.AppleResource;
 import com.facebook.buck.apple.AppleResourceDescription;
@@ -42,17 +40,8 @@ import com.facebook.buck.apple.CoreDataModelDescription;
 import com.facebook.buck.apple.FileExtensions;
 import com.facebook.buck.apple.GroupedSource;
 import com.facebook.buck.apple.HeaderVisibility;
-import com.facebook.buck.apple.IosBinary;
-import com.facebook.buck.apple.IosBinaryDescription;
 import com.facebook.buck.apple.AppleLibraryDescription;
 import com.facebook.buck.apple.IosPostprocessResourcesDescription;
-import com.facebook.buck.apple.IosTest;
-import com.facebook.buck.apple.IosTestDescription;
-import com.facebook.buck.apple.IosTestType;
-import com.facebook.buck.apple.MacosxBinary;
-import com.facebook.buck.apple.MacosxBinaryDescription;
-import com.facebook.buck.apple.MacosxFramework;
-import com.facebook.buck.apple.MacosxFrameworkDescription;
 import com.facebook.buck.apple.XcodeNative;
 import com.facebook.buck.apple.XcodeNativeDescription;
 import com.facebook.buck.apple.XcodeRuleConfiguration;
@@ -78,7 +67,6 @@ import com.facebook.buck.apple.xcode.xcodeproj.XCBuildConfiguration;
 import com.facebook.buck.apple.xcode.xcodeproj.XCVersionGroup;
 import com.facebook.buck.log.Logger;
 import com.facebook.buck.model.BuildTarget;
-import com.facebook.buck.parser.PartialGraph;
 import com.facebook.buck.rules.BuildRule;
 import com.facebook.buck.rules.BuildRuleType;
 import com.facebook.buck.rules.SourcePath;
@@ -222,7 +210,7 @@ public class ProjectGenerator {
           PosixFilePermission.GROUP_READ,
           PosixFilePermission.OTHERS_READ));
 
-  private final PartialGraph partialGraph;
+  private final ImmutableSet<BuildRule> rulesToBuild;
   private final ProjectFilesystem projectFilesystem;
   private final ExecutionContext executionContext;
   private final Path outputDirectory;
@@ -254,14 +242,14 @@ public class ProjectGenerator {
   private Set<String> nativeTargetGIDs;
 
   public ProjectGenerator(
-      PartialGraph partialGraph,
+      Iterable<BuildRule> rulesToBuild,
       Set<BuildTarget> initialTargets,
       ProjectFilesystem projectFilesystem,
       ExecutionContext executionContext,
       Path outputDirectory,
       String projectName,
       Set<Option> options) {
-    this.partialGraph = Preconditions.checkNotNull(partialGraph);
+    this.rulesToBuild = ImmutableSet.copyOf(rulesToBuild);
     this.initialTargets = ImmutableSet.copyOf(initialTargets);
     this.projectFilesystem = Preconditions.checkNotNull(projectFilesystem);
     this.executionContext = Preconditions.checkNotNull(executionContext);
@@ -329,9 +317,7 @@ public class ProjectGenerator {
     LOG.debug("Creating projects for targets %s", initialTargets);
 
     try {
-      Iterable<BuildRule> allRules = partialGraph.getActionGraph().getNodes();
-
-      for (BuildRule rule : allRules) {
+      for (BuildRule rule : rulesToBuild) {
         if (isBuiltByCurrentProject(rule)) {
           LOG.debug("Including rule %s in project", rule);
           // Trigger the loading cache to call the generateTargetForBuildRule function.
@@ -429,31 +415,6 @@ public class ProjectGenerator {
       } else {
         throw new HumanReadableException("Test bundle should be a bundle: " + test.getTestBundle());
       }
-    } else if (rule.getType().equals(IosTestDescription.TYPE)) {
-      IosTest test = (IosTest) rule;
-      result = Optional.of((PBXTarget) generateIosTestTarget(
-              project, rule, test));
-      nativeTargetRule = Optional.<AbstractAppleNativeTargetBuildRule>of(test);
-    } else if (rule.getType().equals(IosBinaryDescription.TYPE)) {
-      IosBinary binary = (IosBinary) rule;
-      result = Optional.of((PBXTarget) generateIOSBinaryTarget(
-              project, rule, binary));
-      nativeTargetRule = Optional.<AbstractAppleNativeTargetBuildRule>of(binary);
-    } else if (rule.getType().equals(MacosxFrameworkDescription.TYPE)) {
-      MacosxFramework framework = (MacosxFramework) rule;
-      result = Optional.of((PBXTarget) generateMacosxFrameworkTarget(
-              project, rule, framework));
-      nativeTargetRule = Optional.<AbstractAppleNativeTargetBuildRule>of(framework);
-    } else if (rule.getType().equals(MacosxBinaryDescription.TYPE)) {
-      MacosxBinary binary = (MacosxBinary) rule;
-      result = Optional.of((PBXTarget) generateMacosxBinaryTarget(
-              project, rule, binary));
-      nativeTargetRule = Optional.<AbstractAppleNativeTargetBuildRule>of(binary);
-    } else if (rule.getType().equals(AppleExtensionDescription.TYPE)) {
-      AppleExtension binary = (AppleExtension) rule;
-      result = Optional.of((PBXTarget) generateExtensionTarget(
-              project, rule, binary));
-      nativeTargetRule = Optional.<AbstractAppleNativeTargetBuildRule>of(binary);
     } else {
       result = Optional.absent();
       nativeTargetRule = Optional.absent();
@@ -543,7 +504,7 @@ public class ProjectGenerator {
         productType,
         AppleLibrary.getOutputFileNameFormat(buildable.getLinkedDynamically()),
         Optional.<Path>absent(),
-        /* includeFrameworks */ false,
+        /* includeFrameworks */ buildable.getLinkedDynamically(),
         /* includeResources */ false);
     project.getTargets().add(target);
     LOG.debug("Generated iOS library target %s", target);
@@ -570,61 +531,6 @@ public class ProjectGenerator {
     }
   }
 
-  private PBXNativeTarget generateIosTestTarget(
-      PBXProject project, BuildRule rule, IosTest buildable) throws IOException {
-    PBXNativeTarget target = generateBinaryTarget(
-        project,
-        rule,
-        buildable,
-        testTypeToTargetProductType(buildable.getTestType()),
-        "%s." + buildable.getTestType().toFileExtension(),
-        buildable.getInfoPlist(),
-        /* includeFrameworks */ true,
-        /* includeResources */ true);
-    project.getTargets().add(target);
-    LOG.debug("Generated iOS test target %s", target);
-    return target;
-  }
-
-  private PBXNativeTarget generateIOSBinaryTarget(
-      PBXProject project, BuildRule rule, IosBinary buildable)
-      throws IOException {
-    PBXNativeTarget target = generateBinaryTarget(
-        project,
-        rule,
-        buildable,
-        PBXTarget.ProductType.APPLICATION,
-        "%s.app",
-        buildable.getInfoPlist(),
-        /* includeFrameworks */ true,
-        /* includeResources */ true);
-
-    addPostBuildScriptPhasesForDependencies(rule, target);
-
-    project.getTargets().add(target);
-    LOG.debug("Generated iOS binary target %s", target);
-    return target;
-  }
-
-  private PBXNativeTarget generateMacosxFrameworkTarget(
-      PBXProject project,
-      BuildRule rule,
-      MacosxFramework buildable)
-      throws IOException {
-    PBXNativeTarget target = generateBinaryTarget(
-        project,
-        rule,
-        buildable,
-        PBXTarget.ProductType.FRAMEWORK,
-        "%s.framework",
-        buildable.getInfoPlist(),
-        /* includeFrameworks */ true,
-        /* includeResources */ true);
-    project.getTargets().add(target);
-    LOG.debug("Generated OS X framework target %s", target);
-    return target;
-  }
-
   private void setNativeTargetGid(
       PBXNativeTarget target,
       AbstractAppleNativeTargetBuildRule buildable) {
@@ -632,24 +538,6 @@ public class ProjectGenerator {
     if (buildableGid.isPresent()) {
       target.setGlobalID(buildableGid.get());
     }
-  }
-
-  private PBXNativeTarget generateExtensionTarget(
-      PBXProject project,
-      BuildRule rule,
-      AppleExtension buildable)
-      throws IOException {
-    PBXNativeTarget target = generateBinaryTarget(
-        project,
-        rule,
-        buildable,
-        PBXTarget.ProductType.APP_EXTENSION,
-        "%s.appex",
-        buildable.getInfoPlist(),
-        /* includeFrameworks */ true,
-        /* includeResources */ true);
-    project.getTargets().add(target);
-    return target;
   }
 
   private PBXNativeTarget generateBinaryTarget(
@@ -680,7 +568,7 @@ public class ProjectGenerator {
     ImmutableMap.Builder<String, String> defaultSettingsBuilder = ImmutableMap.builder();
     defaultSettingsBuilder.put("PUBLIC_HEADERS_FOLDER_PATH",
         getHeaderOutputPathForRule(buildable.getHeaderPathPrefix()));
-    if (!includeFrameworks) {
+    if (rule.getType().equals(AppleLibraryDescription.TYPE)) {
       defaultSettingsBuilder.put("CONFIGURATION_BUILD_DIR", getObjectOutputPathForRule(rule));
     }
     setTargetBuildConfigurations(
@@ -729,29 +617,6 @@ public class ProjectGenerator {
         targetGroup,
         collectCoreDataModels(rule.getDeps()));
 
-    if (includeResources) {
-      // -- copy any extensions into this bundle
-      ImmutableSet.Builder<SourceTreePath> extensionsSourceTreePathsBuilder =
-          ImmutableSet.builder();
-      Iterable<BuildRule> extensions = AppleBuildRules.getRecursiveRuleDependenciesOfType(
-          AppleBuildRules.RecursiveRuleDependenciesMode.COPYING,
-          rule,
-          AppleExtensionDescription.TYPE);
-      for (BuildRule extension : extensions) {
-
-        extensionsSourceTreePathsBuilder.add(
-            new SourceTreePath(
-                PBXReference.SourceTree.BUILT_PRODUCTS_DIR,
-                extension.getPathToOutputFile().getFileName()));
-      }
-      addCopyFilesBuildPhase(
-          target,
-          project.getMainGroup().getOrCreateChildGroupByName("Products"),
-          PBXCopyFilesBuildPhase.Destination.PLUGINS,
-          "",
-          extensionsSourceTreePathsBuilder.build());
-    }
-
     // -- products
     PBXGroup productsGroup = project.getMainGroup().getOrCreateChildGroupByName("Products");
     String productName = getProductName(rule.getBuildTarget());
@@ -761,35 +626,6 @@ public class ProjectGenerator {
     target.setProductName(productName);
     target.setProductReference(productReference);
 
-    return target;
-  }
-
-  private PBXNativeTarget generateMacosxBinaryTarget(
-      PBXProject project, BuildRule rule, MacosxBinary buildable)
-      throws IOException {
-    PBXNativeTarget target = generateBinaryTarget(
-        project,
-        rule,
-        buildable,
-        PBXTarget.ProductType.APPLICATION,
-        "%s.app",
-        buildable.getInfoPlist(),
-        /* includeFrameworks */ true,
-        /* includeResources */ true);
-
-    // Unlike an ios target, macosx targets collect their frameworks and copy them in.
-    ImmutableSet.Builder<String> frameworksBuilder = ImmutableSet.builder();
-    frameworksBuilder.addAll(buildable.getFrameworks());
-    collectRecursiveFrameworkDependencies(rule, frameworksBuilder);
-
-    addCopyFrameworksBuildPhase(
-        rule.getBuildTarget(),
-        target,
-        project.getMainGroup().getOrCreateChildGroupByName("Frameworks"),
-        frameworksBuilder.build());
-
-    project.getTargets().add(target);
-    LOG.debug("Generated OS X binary target %s", target);
     return target;
   }
 
@@ -836,7 +672,7 @@ public class ProjectGenerator {
                 collectRecursiveHeaderMaps(buildRule).iterator())))
         .put(
             "USER_HEADER_SEARCH_PATHS",
-            Joiner.on(' ').join(collectRecursiveUserHeaderMaps(buildRule)))
+            Joiner.on(' ').join(collectUserHeaderMaps(buildRule)))
         .put(
             "LIBRARY_SEARCH_PATHS",
             Joiner.on(' ').join(collectRecursiveLibrarySearchPaths(buildRule)))
@@ -1608,45 +1444,6 @@ public class ProjectGenerator {
     }
   }
 
-  private void addCopyFrameworksBuildPhase(
-      BuildTarget buildTarget,
-      PBXNativeTarget target,
-      PBXGroup sharedFrameworksGroup,
-      Iterable<String> frameworks) {
-
-    ImmutableList.Builder<SourceTreePath> sourceTreePathBuilder = ImmutableList.builder();
-    for (String framework : frameworks) {
-      Path path = Paths.get(framework);
-
-      String firstElement =
-        Preconditions.checkNotNull(Iterables.getFirst(path, Paths.get(""))).toString();
-
-      if (firstElement.charAt(0) == '$') {
-        Optional<PBXReference.SourceTree> sourceTree =
-            PBXReference.SourceTree.fromBuildSetting(firstElement);
-        if (sourceTree.isPresent() &&
-            (sourceTree.get() == PBXReference.SourceTree.BUILT_PRODUCTS_DIR ||
-            sourceTree.get() == PBXReference.SourceTree.ABSOLUTE)) {
-          Path sdkRootRelativePath = path.subpath(1, path.getNameCount());
-          sourceTreePathBuilder.add(
-              new SourceTreePath(sourceTree.get(), sdkRootRelativePath));
-        }
-      } else {
-        // regular path
-        sourceTreePathBuilder.add(
-            new SourceTreePath(
-                PBXReference.SourceTree.GROUP,
-                relativizeBuckRelativePathToGeneratedProject(buildTarget, path.toString())));
-      }
-    }
-    addCopyFilesBuildPhase(
-        target,
-        sharedFrameworksGroup,
-        PBXCopyFilesBuildPhase.Destination.FRAMEWORKS,
-        "",
-        sourceTreePathBuilder.build());
-  }
-
   private void addCopyFilesBuildPhase(
       PBXNativeTarget target,
       PBXGroup sharedGroup,
@@ -1877,6 +1674,11 @@ public class ProjectGenerator {
     }
   }
 
+  private static boolean hasBuckHeaderMaps(BuildRule rule) {
+    return (rule instanceof AbstractAppleNativeTargetBuildRule) &&
+        ((AbstractAppleNativeTargetBuildRule) rule).getUseBuckHeaderMaps();
+  }
+
   private ImmutableSet<String> collectRecursiveHeaderSearchPaths(BuildRule rule) {
     return FluentIterable
         .from(
@@ -1885,6 +1687,12 @@ public class ProjectGenerator {
                 rule,
                 AppleLibraryDescription.TYPE,
                 XcodeNativeDescription.TYPE))
+        .filter(new Predicate<BuildRule>() {
+          @Override
+          public boolean apply(BuildRule input) {
+            return !hasBuckHeaderMaps(input);
+          }
+        })
         .transform(
             new Function<BuildRule, String>() {
               @Override
@@ -1898,21 +1706,30 @@ public class ProjectGenerator {
   private ImmutableSet<String> collectRecursiveHeaderMaps(BuildRule rule) {
     ImmutableSet.Builder<String> builder = ImmutableSet.builder();
 
-    builder.add(getHeaderMapRelativePathForRule(rule, TARGET_HEADER_MAP_SUFFIX));
+    if (hasBuckHeaderMaps(rule)) {
+      builder.add(getHeaderMapRelativePathForRule(rule, TARGET_HEADER_MAP_SUFFIX));
+    }
 
     for (BuildRule input :
         AppleBuildRules.getRecursiveRuleDependenciesOfType(
             AppleBuildRules.RecursiveRuleDependenciesMode.BUILDING,
             rule,
             AppleLibraryDescription.TYPE)) {
-      builder.add(getHeaderMapRelativePathForRule(input, PUBLIC_HEADER_MAP_SUFFIX));
+      if (hasBuckHeaderMaps(input)) {
+        builder.add(getHeaderMapRelativePathForRule(input, PUBLIC_HEADER_MAP_SUFFIX));
+      }
     }
 
     return builder.build();
   }
 
-  private ImmutableSet<String> collectRecursiveUserHeaderMaps(BuildRule rule) {
-    return ImmutableSet.of(getHeaderMapRelativePathForRule(rule, TARGET_USER_HEADER_MAP_SUFFIX));
+  private ImmutableSet<String> collectUserHeaderMaps(BuildRule rule) {
+    if (hasBuckHeaderMaps(rule)) {
+      return ImmutableSet.of(getHeaderMapRelativePathForRule(rule,
+          TARGET_USER_HEADER_MAP_SUFFIX));
+    } else {
+      return ImmutableSet.of();
+    }
   }
 
   private ImmutableSet<String> collectRecursiveLibrarySearchPaths(BuildRule rule) {
@@ -2153,17 +1970,6 @@ public class ProjectGenerator {
     }
 
     return PBXTarget.ProductType.BUNDLE;
-  }
-
-  private static PBXTarget.ProductType testTypeToTargetProductType(IosTestType testType) {
-      switch (testType) {
-        case OCTEST:
-          return PBXTarget.ProductType.BUNDLE;
-        case XCTEST:
-          return PBXTarget.ProductType.UNIT_TEST;
-        default:
-          throw new IllegalStateException("Invalid test type value: " + testType.toString());
-      }
   }
 
   /**
